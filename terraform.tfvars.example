@@ -1,0 +1,3 @@
+aws_region  = "us-east-1"
+environment = "prd"
+api_name    = "fiap-workshop-serverless-api"

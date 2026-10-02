@@ -1,0 +1,10 @@
+{
+  "name": "lambda-authorizer",
+  "version": "1.0.0",
+  "description": "API Gateway Token Authorizer",
+  "main": "index.js",
+  "scripts": {
+    "test": "node -e \"require('./index.js')\""
+  },
+  "license": "MIT"
+}
