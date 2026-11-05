@@ -15,3 +15,15 @@ variable "api_name" {
   description = "API Gateway name"
   default     = "fiap-workshop-serverless-api"
 }
+
+variable "use_existing_lab_role" {
+  type        = bool
+  description = "Whether to use existing AWS Academy LabRole instead of creating IAM roles"
+  default     = true
+}
+
+variable "lab_role_name" {
+  type        = string
+  description = "Name of the existing IAM role for AWS Academy Learner Lab"
+  default     = "LabRole"
+}

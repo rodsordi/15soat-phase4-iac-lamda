@@ -1,0 +1,145 @@
+name: "Terraform Serverless Lambda CI/CD Pipeline"
+
+on:
+  push:
+    branches:
+      - master
+
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Terraform action to execute'
+        required: true
+        default: 'apply'
+        type: choice
+        options:
+          - plan
+          - apply
+          - destroy
+
+concurrency:
+  group: terraform-lambda-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  terraform:
+    name: "Terraform Lambda Automation"
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION || secrets.AWS_REGION || 'us-east-1' }}
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Test Authorizer Code
+        run: |
+          cd src/authorizer
+          npm test
+
+      - name: Test Webhook Code
+        run: |
+          cd src/webhook
+          npm test
+
+      - name: Configure AWS Credentials (AWS Academy Support)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.8.0"
+
+      - name: Ensure Hardened Terraform State Storage Exists
+        run: |
+          BUCKET="fiap-phase4-terraform-state"
+          TABLE="fiap-phase4-tf-lock"
+          REGION="${{ env.AWS_REGION }}"
+
+          # 1. S3 Bucket Bootstrap & Hardening
+          if ! aws s3api head-bucket --bucket "$BUCKET" 2>/dev/null; then
+            echo "Creating S3 bucket $BUCKET..."
+            aws s3 mb "s3://$BUCKET" --region "$REGION"
+          else
+            echo "S3 bucket $BUCKET already exists."
+          fi
+
+          echo "Applying S3 bucket versioning, encryption, and public access block..."
+          aws s3api put-bucket-versioning \
+            --bucket "$BUCKET" \
+            --versioning-configuration Status=Enabled
+
+          aws s3api put-bucket-encryption \
+            --bucket "$BUCKET" \
+            --server-side-encryption-configuration '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}'
+
+          aws s3api put-public-access-block \
+            --bucket "$BUCKET" \
+            --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
+
+          # 2. DynamoDB Lock Table Bootstrap
+          if ! aws dynamodb describe-table --table-name "$TABLE" --region "$REGION" 2>/dev/null; then
+            echo "Creating DynamoDB table $TABLE..."
+            aws dynamodb create-table \
+              --table-name "$TABLE" \
+              --attribute-definitions AttributeName=LockID,AttributeType=S \
+              --key-schema AttributeName=LockID,KeyType=HASH \
+              --billing-mode PAY_PER_REQUEST \
+              --region "$REGION"
+          else
+            echo "DynamoDB table $TABLE already exists."
+          fi
+
+      - name: Terraform Format Check
+        id: fmt
+        run: terraform fmt -check -recursive
+        continue-on-error: true
+
+      - name: Terraform Init
+        id: init
+        run: terraform init
+
+      - name: Terraform Validate
+        id: validate
+        run: terraform validate -no-color
+
+      - name: Terraform Plan
+        id: plan
+        if: github.event_name == 'workflow_dispatch' && inputs.action == 'plan'
+        run: terraform plan -no-color
+
+      - name: Terraform Apply
+        id: apply
+        if: (github.ref == 'refs/heads/master' && github.event_name == 'push') || (github.event_name == 'workflow_dispatch' && inputs.action == 'apply')
+        run: terraform apply -auto-approve -no-color
+
+      - name: Publish Infrastructure Summary
+        if: (github.ref == 'refs/heads/master' && github.event_name == 'push') || (github.event_name == 'workflow_dispatch' && inputs.action == 'apply')
+        run: |
+          echo "### 🚀 Phase 4 Serverless Lambda & API Gateway Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- **Region**: ${{ env.AWS_REGION }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **HTTP API Endpoint**: $(terraform output -raw api_endpoint 2>/dev/null || echo 'Provisioned')" >> $GITHUB_STEP_SUMMARY
+          echo "- **Webhook URL**: $(terraform output -raw webhook_url 2>/dev/null || echo 'Provisioned')" >> $GITHUB_STEP_SUMMARY
+          echo "- **Authorizer Function ARN**: $(terraform output -raw authorizer_function_arn 2>/dev/null || echo 'Provisioned')" >> $GITHUB_STEP_SUMMARY
+          echo "- **Webhook Function ARN**: $(terraform output -raw webhook_function_arn 2>/dev/null || echo 'Provisioned')" >> $GITHUB_STEP_SUMMARY
+
+      - name: Terraform Destroy
+        id: destroy
+        if: github.event_name == 'workflow_dispatch' && inputs.action == 'destroy'
+        run: terraform destroy -auto-approve -no-color

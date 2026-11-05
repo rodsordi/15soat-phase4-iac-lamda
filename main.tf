@@ -10,8 +10,14 @@ data "archive_file" "webhook_zip" {
   output_path = "${path.module}/dist/webhook.zip"
 }
 
+data "aws_iam_role" "lab_role" {
+  count = var.use_existing_lab_role ? 1 : 0
+  name  = var.lab_role_name
+}
+
 resource "aws_iam_role" "lambda_exec" {
-  name = "fiap-workshop-lambda-exec-${var.environment}"
+  count = var.use_existing_lab_role ? 0 : 1
+  name  = "fiap-workshop-lambda-exec-${var.environment}"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -26,8 +32,13 @@ resource "aws_iam_role" "lambda_exec" {
 }
 
 resource "aws_iam_role_policy_attachment" "lambda_logs" {
-  role       = aws_iam_role.lambda_exec.name
+  count      = var.use_existing_lab_role ? 0 : 1
+  role       = aws_iam_role.lambda_exec[0].name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+
+locals {
+  lambda_role_arn = var.use_existing_lab_role ? data.aws_iam_role.lab_role[0].arn : aws_iam_role.lambda_exec[0].arn
 }
 
 resource "aws_cloudwatch_log_group" "authorizer_logs" {
@@ -41,7 +52,7 @@ resource "aws_lambda_function" "authorizer" {
   source_code_hash = data.archive_file.authorizer_zip.output_base64sha256
   runtime          = "nodejs20.x"
   handler          = "index.handler"
-  role             = aws_iam_role.lambda_exec.arn
+  role             = local.lambda_role_arn
   timeout          = 5
 
   environment {
@@ -64,7 +75,7 @@ resource "aws_lambda_function" "webhook" {
   source_code_hash = data.archive_file.webhook_zip.output_base64sha256
   runtime          = "nodejs20.x"
   handler          = "index.handler"
-  role             = aws_iam_role.lambda_exec.arn
+  role             = local.lambda_role_arn
   timeout          = 10
 
   environment {
