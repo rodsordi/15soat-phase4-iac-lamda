@@ -10,6 +10,12 @@ data "archive_file" "webhook_zip" {
   output_path = "${path.module}/dist/webhook.zip"
 }
 
+data "archive_file" "auth_zip" {
+  type        = "zip"
+  source_dir  = "${path.module}/src/auth"
+  output_path = "${path.module}/dist/auth.zip"
+}
+
 data "aws_iam_role" "lab_role" {
   count = var.use_existing_lab_role ? 1 : 0
   name  = var.lab_role_name
@@ -87,6 +93,37 @@ resource "aws_lambda_function" "webhook" {
   depends_on = [aws_cloudwatch_log_group.webhook_logs]
 }
 
+resource "aws_cloudwatch_log_group" "auth_logs" {
+  name              = "/aws/lambda/fiap-auth-${var.environment}"
+  retention_in_days = 7
+}
+
+resource "tls_private_key" "jwt" {
+  algorithm = "RSA"
+  rsa_bits  = 2048
+}
+
+resource "aws_lambda_function" "auth" {
+  function_name    = "fiap-auth-${var.environment}"
+  filename         = data.archive_file.auth_zip.output_path
+  source_code_hash = data.archive_file.auth_zip.output_base64sha256
+  runtime          = "nodejs20.x"
+  handler          = "index.handler"
+  role             = local.lambda_role_arn
+  timeout          = 10
+
+  environment {
+    variables = {
+      ENVIRONMENT     = var.environment
+      JWT_PRIVATE_KEY = var.jwt_private_key != "" ? var.jwt_private_key : tls_private_key.jwt.private_key_pem
+      JWT_PUBLIC_KEY  = var.jwt_public_key != "" ? var.jwt_public_key : tls_private_key.jwt.public_key_pem
+      JWT_ISSUER      = "${aws_apigatewayv2_api.http_api.api_endpoint}"
+    }
+  }
+
+  depends_on = [aws_cloudwatch_log_group.auth_logs]
+}
+
 # API Gateway HTTP API
 resource "aws_apigatewayv2_api" "http_api" {
   name          = "${var.api_name}-${var.environment}"
@@ -121,6 +158,36 @@ resource "aws_apigatewayv2_route" "webhook_route" {
   target    = "integrations/${aws_apigatewayv2_integration.webhook_integration.id}"
 }
 
+resource "aws_apigatewayv2_integration" "auth_integration" {
+  api_id           = aws_apigatewayv2_api.http_api.id
+  integration_type = "AWS_PROXY"
+  integration_uri  = aws_lambda_function.auth.invoke_arn
+}
+
+resource "aws_apigatewayv2_route" "auth_login_route" {
+  api_id    = aws_apigatewayv2_api.http_api.id
+  route_key = "POST /auth/login"
+  target    = "integrations/${aws_apigatewayv2_integration.auth_integration.id}"
+}
+
+resource "aws_apigatewayv2_route" "auth_users_route" {
+  api_id    = aws_apigatewayv2_api.http_api.id
+  route_key = "POST /users"
+  target    = "integrations/${aws_apigatewayv2_integration.auth_integration.id}"
+}
+
+resource "aws_apigatewayv2_route" "auth_jwks_route" {
+  api_id    = aws_apigatewayv2_api.http_api.id
+  route_key = "GET /.well-known/jwks.json"
+  target    = "integrations/${aws_apigatewayv2_integration.auth_integration.id}"
+}
+
+resource "aws_apigatewayv2_route" "auth_health_route" {
+  api_id    = aws_apigatewayv2_api.http_api.id
+  route_key = "GET /health"
+  target    = "integrations/${aws_apigatewayv2_integration.auth_integration.id}"
+}
+
 resource "aws_apigatewayv2_stage" "default" {
   api_id      = aws_apigatewayv2_api.http_api.id
   name        = "$default"
@@ -139,6 +206,14 @@ resource "aws_lambda_permission" "api_gw_webhook" {
   statement_id  = "AllowAPIGatewayWebhookInvoke"
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.webhook.function_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_apigatewayv2_api.http_api.execution_arn}/*/*"
+}
+
+resource "aws_lambda_permission" "api_gw_auth" {
+  statement_id  = "AllowAPIGatewayAuthInvoke"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.auth.function_name
   principal     = "apigateway.amazonaws.com"
   source_arn    = "${aws_apigatewayv2_api.http_api.execution_arn}/*/*"
 }

@@ -53,6 +53,11 @@ jobs:
           cd src/webhook
           npm test
 
+      - name: Test Auth Code
+        run: |
+          cd src/auth
+          npm test
+
       - name: Configure AWS Credentials (AWS Academy Support)
         uses: aws-actions/configure-aws-credentials@v4
         with:

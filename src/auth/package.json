@@ -1,0 +1,10 @@
+{
+  "name": "lambda-auth",
+  "version": "1.0.0",
+  "description": "Serverless Auth, JWT Issuance and User Identity Management Handler",
+  "main": "index.js",
+  "scripts": {
+    "test": "node test.js"
+  },
+  "license": "MIT"
+}

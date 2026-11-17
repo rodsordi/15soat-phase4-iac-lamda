@@ -27,3 +27,16 @@ variable "lab_role_name" {
   description = "Name of the existing IAM role for AWS Academy Learner Lab"
   default     = "LabRole"
 }
+
+variable "jwt_private_key" {
+  type        = string
+  description = "RSA Private Key PEM for signing JWT tokens"
+  default     = ""
+  sensitive   = true
+}
+
+variable "jwt_public_key" {
+  type        = string
+  description = "RSA Public Key PEM for JWKS verification"
+  default     = ""
+}
