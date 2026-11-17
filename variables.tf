@@ -1,7 +1,7 @@
 variable "aws_region" {
   type        = string
   description = "AWS region"
-  default     = "us-east-1"
+  default     = "us-east-2"
 }
 
 variable "environment" {
@@ -19,7 +19,7 @@ variable "api_name" {
 variable "use_existing_lab_role" {
   type        = bool
   description = "Whether to use existing AWS Academy LabRole instead of creating IAM roles"
-  default     = true
+  default     = false
 }
 
 variable "lab_role_name" {
